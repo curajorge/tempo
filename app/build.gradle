@@ -1,0 +1,17 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.jcm.whoopheartratepoc'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.jcm.whoopheartratepoc'
+        minSdk 26
+        targetSdk 35
+        versionCode 10
+        versionName '0.7.1'
+        testInstrumentationRunner 'com.jcm.whoopheartratepoc.ImportChecks'
+    }
+}
