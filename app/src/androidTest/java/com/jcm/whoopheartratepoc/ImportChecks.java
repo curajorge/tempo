@@ -56,8 +56,8 @@ public final class ImportChecks extends Instrumentation {
             check(AiWorkouts.load(testContext).get(0).totalSeconds() == 60
                     && AiWorkouts.load(testContext).get(0).phases[0].zone == 3, "stage edit persisted");
             testPrefs.edit().clear().commit(); // Only the isolated_check_ preferences, never the real library.
-            checkNavigation();
-            result.putString("stream", passed + " import checks passed\n");
+            passed += SessionChecks.run(testContext);
+            result.putString("stream", passed + " import, storage and session checks passed\n");
             finish(-1, result);
         } catch (Throwable e) {
             result.putString("stream", "FAIL after " + passed + ": " + e.toString());
@@ -70,72 +70,5 @@ public final class ImportChecks extends Instrumentation {
     }
     void check(boolean ok, String name) throws Exception {
         if (!ok) throw new Exception(name); passed++;
-    }
-    void checkNavigation() throws Exception {
-        android.content.Intent intent = new android.content.Intent(getTargetContext(), MainActivity.class);
-        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-        MainActivity activity = (MainActivity) startActivitySync(intent);
-        final Throwable[] failure = {null};
-        runOnMainSync(() -> {
-            try {
-                call(activity, "resetWorkout");
-                jump(activity, 2);
-                check((int) field(activity, "phaseIndex") == 2 && !(boolean) field(activity, "sessionRunning"), "select before start");
-                set(activity, "currentBpm", 80);
-                call(activity, "startWorkout");
-                check((int) field(activity, "phaseIndex") == 2 && (boolean) field(activity, "sessionRunning"), "start selected stage");
-                set(activity, "targetMillis", 15000L);
-                set(activity, "heartRateSum", 800L);
-                set(activity, "heartRateSamples", 10);
-                jump(activity, 3);
-                check((int) field(activity, "phaseIndex") == 3 && !(boolean) field(activity, "sessionPaused"), "skip while running");
-                check((long) field(activity, "targetMillis") == 15000L && (long) field(activity, "heartRateSum") == 800L, "keep metrics");
-                boolean originalTheme = (boolean) field(activity, "glassTheme");
-                Object gauge = field(activity, "trainingView");
-                Object connection = field(activity, "gatt");
-                Object startedAt = field(activity, "phaseStartedAt");
-                java.lang.reflect.Method theme = MainActivity.class.getDeclaredMethod("changeTheme", boolean.class);
-                theme.setAccessible(true);
-                try {
-                    theme.invoke(activity, !originalTheme);
-                    check((boolean) field(activity, "glassTheme") != originalTheme, "theme switches");
-                    check(field(activity, "trainingView") == gauge && field(activity, "gatt") == connection, "theme retains trace and connection");
-                    check(field(activity, "phaseStartedAt").equals(startedAt) && (boolean) field(activity, "sessionRunning")
-                            && !(boolean) field(activity, "sessionPaused"), "theme retains running timer");
-                    check((long) field(activity, "targetMillis") == 15000L, "theme retains metrics");
-                } finally { theme.invoke(activity, originalTheme); }
-                call(activity, "toggleWorkout");
-                jump(activity, 1);
-                check((boolean) field(activity, "sessionPaused"), "skip stays paused");
-                check(field(activity, "phaseStartedAt").equals(field(activity, "pausedAt")), "full restarted timer");
-                jump(activity, -1);
-                check((int) field(activity, "phaseIndex") == 1, "previous boundary");
-                jump(activity, 999);
-                check((int) field(activity, "phaseIndex") == 1, "next boundary");
-                WorkoutPlan[] plans = (WorkoutPlan[]) field(activity, "workouts");
-                int selected = (int) field(activity, "selectedWorkout");
-                set(activity, "phaseIndex", plans[selected].phases.length);
-                call(activity, "finishWorkout");
-                jump(activity, 0);
-                check((boolean) field(activity, "sessionRunning") && (boolean) field(activity, "sessionPaused"), "revisit complete session");
-                call(activity, "resetWorkout");
-                check((long) field(activity, "targetMillis") == 0L && (int) field(activity, "phaseIndex") == 0, "full reset");
-            } catch (Throwable e) { failure[0] = e; }
-            finally { activity.finish(); }
-        });
-        if (failure[0] != null) throw new Exception("Navigation checks", failure[0]);
-    }
-    Object field(Object target, String name) throws Exception {
-        java.lang.reflect.Field f = MainActivity.class.getDeclaredField(name); f.setAccessible(true); return f.get(target);
-    }
-    void set(Object target, String name, Object value) throws Exception {
-        java.lang.reflect.Field f = MainActivity.class.getDeclaredField(name); f.setAccessible(true); f.set(target, value);
-    }
-    void call(Object target, String name) throws Exception {
-        java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod(name); m.setAccessible(true); m.invoke(target);
-    }
-    void jump(Object target, int index) throws Exception {
-        java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod("jumpToStage", int.class);
-        m.setAccessible(true); m.invoke(target, index);
     }
 }

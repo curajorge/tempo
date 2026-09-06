@@ -100,7 +100,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     private Button previousStage, restartStage, nextStage;
 
     private int visualizationMode = TrainingView.DRIVE;
-    private boolean glassTheme = false;
+    private Button muteButton;
     private int selectedWorkout;
     private int[][] customZones;
     private boolean useCustomZones;
@@ -120,18 +120,19 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     private String stageKey = "";
     private TextToSpeech textToSpeech;
     private boolean speechReady;
-
-    private final Runnable stopScanRunnable = this::stopScan;
-    private final Runnable workoutTicker = new Runnable() {
-        @Override public void run() {
-            updateWorkout();
-            if (sessionRunning) handler.postDelayed(this, 200);
+    private TrainingSession displayedSession;
+    private boolean serviceStarting;
+    private final Runnable serviceRefresh = new Runnable() {
+        public void run() {
+            syncSession();
+            if (!destroyed) handler.postDelayed(this, 500);
         }
     };
 
+    private final Runnable stopScanRunnable = this::stopScan;
+
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        glassTheme = getPreferences(MODE_PRIVATE).getBoolean("glass_theme", false);
         restingHr = getPreferences(MODE_PRIVATE).getInt("resting_hr", 60);
         maxHr = getPreferences(MODE_PRIVATE).getInt("max_hr", 190);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -154,6 +155,8 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         textToSpeech = new TextToSpeech(this, this);
         renderState();
         handler.postDelayed(this::reconnectAutomatically, 350);
+        handler.post(serviceRefresh);
+        if (WorkoutService.instance == null) handler.postDelayed(this::offerRecovery, 600);
     }
 
     private TextView inZoneValue, averageValue, peakValue, nextText;
@@ -161,8 +164,6 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     private void buildUi() {
         LinearLayout outer = new LinearLayout(this);
         outer.setOrientation(LinearLayout.VERTICAL); outer.setBackgroundColor(NIGHT);
-        if (glassTheme) outer.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xff243949, NIGHT, 0xff102c32}));
         outer.setOnApplyWindowInsetsListener((view, insets) -> {
             view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
                     insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
@@ -170,7 +171,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         });
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         scroll.setFillViewport(true); scroll.setClipToPadding(false);
-        LinearLayout root = new LinearLayout(this); root.setOrientation(1);
+        LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(22), dp(16), dp(22), dp(20));
         scroll.addView(root); outer.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout header = row(); header.setGravity(Gravity.CENTER_VERTICAL);
@@ -193,17 +194,15 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         connectionText.setOnClickListener(v -> openSensor());
         root.addView(connectionText);
 
-        LinearLayout themes = row();
-        themes.setPadding(dp(4), dp(4), dp(4), dp(4));
-        themes.setBackground(surface(PANEL, 20));
-        Button classic = button("V1 Classic", !glassTheme);
-        Button glass = button("V2 Glass", glassTheme);
-        classic.setOnClickListener(v -> changeTheme(false));
-        glass.setOnClickListener(v -> changeTheme(true));
-        themes.addView(classic, weighted(1, dp(44)));
-        themes.addView(glass, weighted(1, dp(44)));
-        LinearLayout.LayoutParams themeParams = match(dp(52)); themeParams.bottomMargin = dp(12);
-        root.addView(themes, themeParams);
+        LinearLayout tools = row();
+        muteButton = button("Mute audio", false);
+        muteButton.setOnClickListener(v -> setMuted(!AudioSettings.muted(this)));
+        tools.addView(muteButton, weighted(1, dp(44)));
+        Button settings = button("Settings", false);settings.setOnClickListener(v -> showSettings());
+        LinearLayout.LayoutParams settingsParams=weighted(1,dp(44));settingsParams.leftMargin=dp(8);
+        tools.addView(settings,settingsParams);
+        LinearLayout.LayoutParams toolsParams=match(dp(44));toolsParams.bottomMargin=dp(14);
+        root.addView(tools,toolsParams);updateMuteButton();
 
         LinearLayout tabs = row();
         tabs.setPadding(dp(4), dp(4), dp(4), dp(4)); tabs.setBackground(surface(PANEL, 16));
@@ -217,12 +216,11 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         if (trainingView == null) trainingView = new TrainingView(this);
         else if (trainingView.getParent() instanceof android.view.ViewGroup)
             ((android.view.ViewGroup) trainingView.getParent()).removeView(trainingView);
-        trainingView.setGlass(glassTheme);
-        LinearLayout.LayoutParams gaugeParams = match(dp(310));
+        LinearLayout.LayoutParams gaugeParams = match(dp(280));
         gaugeParams.topMargin = dp(12); gaugeParams.bottomMargin = dp(12);
         root.addView(trainingView, gaugeParams);
 
-        LinearLayout phasePanel = new LinearLayout(this); phasePanel.setOrientation(1);
+        LinearLayout phasePanel = new LinearLayout(this); phasePanel.setOrientation(LinearLayout.VERTICAL);
         phasePanel.setPadding(dp(18), dp(16), dp(18), dp(16));
         phasePanel.setBackground(surface(PANEL, 20));
         LinearLayout phaseRow = row();
@@ -263,13 +261,6 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         averageValue = metric(metrics, "Average bpm");
         peakValue = metric(metrics, "Peak bpm");
         root.addView(metrics);
-        if (glassTheme) {
-            metrics.setPadding(dp(16), dp(18), dp(16), dp(18));
-            metrics.setBackground(surface(PANEL, 22));
-            LinearLayout.LayoutParams metricsParams = match(-2);
-            metricsParams.topMargin = dp(14); metricsParams.bottomMargin = dp(14);
-            metrics.setLayoutParams(metricsParams);
-        }
         statsText = new TextView(this); // Kept for the existing summary calculation.
         LinearLayout planRow = row();
         workoutButton = button(workouts[selectedWorkout].toString() + "  ⌄", false);
@@ -279,14 +270,19 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         zonesButton = button("Zones", false); zonesButton.setOnClickListener(v -> editZones());
         LinearLayout.LayoutParams zp = sized(dp(76), dp(52)); zp.leftMargin = dp(8);
         planRow.addView(zonesButton, zp); root.addView(planRow);
-        stageList = new LinearLayout(this); stageList.setOrientation(1);
+        stageList = new LinearLayout(this); stageList.setOrientation(LinearLayout.VERTICAL);
         stageList.setPadding(dp(4), dp(12), dp(4), dp(4));
         root.addView(stageList);
         Button ai = button("Create with WHOOP AI", false);
         ai.setOnClickListener(v -> openAiWorkouts());
         LinearLayout.LayoutParams aip = match(dp(50)); aip.topMargin = dp(10);
         root.addView(ai, aip);
-        TextView note = label("Keep this screen open during training.", 12, MUTED);
+        LinearLayout extras = row();
+        Button history = button("History", false); history.setOnClickListener(v -> showHistory());
+        extras.addView(history, weighted(1, dp(48)));
+        LinearLayout.LayoutParams extraParams=match(dp(48));extraParams.topMargin=dp(10);
+        root.addView(extras,extraParams);
+        TextView note = label("Active workouts continue with the screen locked. Use the training notification to pause or stop.", 12, MUTED);
         note.setPadding(0, dp(10), 0, 0); root.addView(note);
         TextView independence = label("Tempo is an independent app. Not affiliated with or endorsed by WHOOP.", 12, MUTED);
         independence.setPadding(0, dp(8), 0, dp(8)); root.addView(independence);
@@ -304,27 +300,12 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         setContentView(outer);
         selectVisualization(visualizationMode);
     }
-    private void changeTheme(boolean glass) {
-        if (glassTheme == glass) return;
-        CharSequence status = connectionText.getText();
-        int statusColor = connectionText.getCurrentTextColor();
-        glassTheme = glass;
-        getPreferences(MODE_PRIVATE).edit().putBoolean("glass_theme", glass).apply();
-        buildUi();
-        connectionText.setText(status); connectionText.setTextColor(statusColor);
-        renderState();
-    }
     private GradientDrawable surface(int color, int radius) {
         GradientDrawable shape = new GradientDrawable();
-        if (glassTheme && radius > 0) {
-            shape.setOrientation(GradientDrawable.Orientation.TL_BR);
-            shape.setColors(new int[]{0x993d5365, 0x66132334});
-            shape.setStroke(dp(1), 0x426d8b9c);
-        } else shape.setColor(color);
-        shape.setCornerRadius(dp(glassTheme && radius > 0 ? radius + 4 : radius)); return shape;
+        shape.setColor(color);shape.setCornerRadius(dp(radius)); return shape;
     }
     private TextView metric(LinearLayout parent, String name) {
-        LinearLayout column = new LinearLayout(this); column.setOrientation(1);
+        LinearLayout column = new LinearLayout(this); column.setOrientation(LinearLayout.VERTICAL);
         TextView value = label("—", 23, IVORY);
         value.setTypeface(getResources().getFont(R.font.geist_medium));
         value.setFontFeatureSettings("tnum");
@@ -337,6 +318,11 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         trainingView.setMode(mode);
         styleButton(driveTab, mode == TrainingView.DRIVE);
         styleButton(reactorTab, mode == TrainingView.REACTOR);
+        driveTab.setBackground(surface(mode==TrainingView.DRIVE?0xff243447:PANEL,12));
+        reactorTab.setBackground(surface(mode==TrainingView.REACTOR?0xff243447:PANEL,12));
+        driveTab.setTextColor(mode==TrainingView.DRIVE?CYAN:MUTED);
+        reactorTab.setTextColor(mode==TrainingView.REACTOR?CYAN:MUTED);
+        driveTab.setSelected(mode==TrainingView.DRIVE);reactorTab.setSelected(mode==TrainingView.REACTOR);
     }
 
     private AiWorkouts workoutManager() {
@@ -420,44 +406,185 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     }
 
     private void toggleWorkout() {
-        if (!sessionRunning) startWorkout();
-        else if (sessionPaused) {
-            if (currentBpm == 0) { openSensor(); return; }
-            long now = SystemClock.elapsedRealtime();
-            phaseStartedAt += now - pausedAt;
-            lastMetricAt = now;
-            sessionPaused = false;
-            primaryButton.setText("Pause");
-            announce("Resume " + currentPhase().name);
-        } else {
-            sessionPaused = true;
-            pausedAt = SystemClock.elapsedRealtime();
-            primaryButton.setText("Resume");
-            announce("Workout paused");
+        if (WorkoutService.instance != null && WorkoutService.latest != null && !WorkoutService.latest.done) {
+            WorkoutService.instance.toggle();syncSession();return;
         }
-        renderState();
+        if (serviceStarting) return;
+        startWorkout();
     }
 
     private void startWorkout() {
+        if (serviceStarting) return;
+        if (WorkoutService.instance != null) {
+            Toast.makeText(this, "Finishing the previous session. Try again in a moment.", Toast.LENGTH_SHORT).show();return;
+        }
+        try {if(SessionStore.recover(this)!=null){offerRecovery();return;}}
+        catch(Exception e){Toast.makeText(this,"An earlier session could not be read. It has not been overwritten.",Toast.LENGTH_LONG).show();return;}
         if (currentBpm == 0) { openSensor(); return; }
-        sessionRunning = true;
-        sessionPaused = false;
-        if (phaseIndex >= workouts[selectedWorkout].phases.length) phaseIndex = 0;
-        phaseStartedAt = SystemClock.elapsedRealtime();
-        lastMetricAt = phaseStartedAt;
-        targetMillis = heartRateSum = 0;
-        heartRateSamples = peakHeartRate = 0;
-        primaryButton.setText("Pause");
-        workoutButton.setEnabled(false);
-        zonesButton.setEnabled(false);
-        announcePhase();
-        handler.removeCallbacks(workoutTicker);
-        handler.post(workoutTicker);
+        if (!notificationRequested && Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 43);
+            Toast.makeText(this, "Notifications provide screen-off controls. Tap Start again after choosing.", Toast.LENGTH_LONG).show();
+            notificationRequested = true;return;
+        }
+        beginBackgroundSession();
+    }
+
+    private boolean notificationRequested;
+    private void syncSession() {
+        TrainingSession s=WorkoutService.latest;
+        if (s==null) return;
+        if (WorkoutService.instance==null && !s.done) {
+            WorkoutService.latest=null;serviceStarting=false;sessionRunning=false;sessionPaused=true;currentBpm=0;
+            renderState();offerRecovery();return;
+        }
+        serviceStarting=false;
+        if (displayedSession!=s) {
+            stopScan();closeGatt();
+            int match=-1;
+            try {for(int i=0;i<workouts.length;i++)if(WorkoutJson.encode(workouts[i]).equals(WorkoutJson.encode(s.plan))){match=i;break;}}
+            catch(Exception ignored){}
+            if(match<0){workouts=java.util.Arrays.copyOf(workouts,workouts.length+1);match=workouts.length-1;workouts[match]=s.plan;}
+            selectedWorkout=match;displayedSession=s;stageKey="";
+            workoutButton.setText(workouts[selectedWorkout].toString()+"  ⌄");
+        }
+        sessionRunning=!s.done;sessionPaused=s.paused;phaseIndex=s.done?s.plan.phases.length:s.stage;
+        long now=SystemClock.elapsedRealtime();phaseStartedAt=now-s.stageElapsed;pausedAt=now;
+        targetMillis=s.target;heartRateSum=s.average();heartRateSamples=s.measured>0?1:0;peakHeartRate=s.peak;
+        currentBpm=s.waiting?0:s.bpm;lastHrAt=s.lastHr;
+        connectionText.setText(WorkoutService.status);connectionText.setTextColor(s.waiting?MUTED:CYAN);
+        renderState();
+        primaryButton.setText(s.done?"Start again":s.waiting?(s.autoResume?"Pause auto-resume":"Waiting for sensor"):s.paused?"Resume":"Pause");
+        workoutButton.setEnabled(s.done);zonesButton.setEnabled(s.done);
+        if(s.waiting && !s.done)cueText.setText("Signal missing · timer paused");
+        if(s.done)cueText.setText(WorkoutService.status.contains("save failed")?"History save failed · reopen Tempo to retry":s.outcome.equals("completed")?"Workout complete · saved to History":"Session stopped · saved to History");
+        if(s.done && WorkoutService.instance==null){
+            WorkoutService.latest=null;displayedSession=null;currentBpm=0;
+            handler.post(this::reconnectAutomatically);
+        }
+    }
+    private void offerRecovery() {
+        if(destroyed || WorkoutService.instance!=null || serviceStarting)return;
+        try {
+            TrainingSession s=SessionStore.recover(this);if(s==null)return;
+            FormSheet f=new FormSheet(this,"Resume your session?",s.plan.name);
+            TextView error=f.error();
+            f.label(formatTime(s.elapsed/1000)+" recorded. Time while Tempo was closed is not counted.");
+            if(!s.done)f.action("Restore paused session",true,()->{
+                try{launchSession(s,false);f.dismiss();}catch(Exception e){error.setText("Could not restore: "+e.getMessage());}
+            });
+            f.action("Save to History",false,()->{
+                try{s.finish(SystemClock.elapsedRealtime());SessionStore.finish(this,s);f.dismiss();showHistory();}
+                catch(Exception e){error.setText("Could not save: "+e.getMessage());}
+            });
+            f.show();
+        }catch(Exception e){Toast.makeText(this,"Saved session could not be read. It has not been deleted.",Toast.LENGTH_LONG).show();}
+    }
+    private void setMuted(boolean muted) {
+        AudioSettings.prefs(this).edit().putBoolean("muted",muted).apply();
+        if(muted && textToSpeech!=null)textToSpeech.stop();
+        updateMuteButton();
+    }
+    private void updateMuteButton() {
+        if(muteButton==null)return;
+        boolean muted=AudioSettings.muted(this);
+        muteButton.setText(muted?"Unmute audio":"Mute audio");
+        muteButton.setTextColor(muted?CORAL:MUTED);
+        muteButton.setContentDescription(muted?"Audio muted. Tap to unmute all Tempo speech.":"Audio on. Tap to mute all Tempo speech.");
+    }
+    private void settingsSwitch(FormSheet f,String title,String detail,boolean checked,java.util.function.Consumer<Boolean> change) {
+        LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(16),dp(10),dp(16),dp(12));row.setBackground(surface(PANEL,14));
+        android.widget.Switch toggle=new android.widget.Switch(this);
+        toggle.setText(title);toggle.setTextSize(16);toggle.setTextColor(IVORY);
+        toggle.setTypeface(getResources().getFont(R.font.geist_medium));toggle.setChecked(checked);
+        toggle.setMinHeight(dp(48));toggle.setThumbTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{CYAN,MUTED}));
+        toggle.setOnCheckedChangeListener((v,on)->change.accept(on));row.addView(toggle);
+        TextView description=label(detail,13,MUTED);description.setPadding(0,dp(4),0,0);row.addView(description);
+        LinearLayout.LayoutParams params=match(-2);params.topMargin=dp(10);f.body.addView(row,params);
+    }
+    private void showSettings() {
+        android.content.SharedPreferences p=AudioSettings.prefs(this);
+        FormSheet f=new FormSheet(this,"Settings","Your preferences are saved automatically, including during a workout.");
+        settingsSwitch(f,"Mute all audio","Silences every Tempo cue, including connection alerts. Training continues normally.",AudioSettings.muted(this),this::setMuted);
+        settingsSwitch(f,"Stage announcements","Hear the next stage and its target BPM range.",AudioSettings.stages(this),on->p.edit().putBoolean("stage_audio",on).apply());
+        settingsSwitch(f,"Zone guidance","Hear when to ease off or increase effort after a sustained deviation.",AudioSettings.zones(this),on->p.edit().putBoolean("zone_audio",on).apply());
+        f.label("Minimum time between zone reminders");
+        android.widget.RadioGroup intervals=new android.widget.RadioGroup(this);
+        intervals.setOrientation(LinearLayout.HORIZONTAL);
+        for(int seconds:new int[]{30,45,60}){
+            android.widget.RadioButton choice=new android.widget.RadioButton(this);
+            choice.setId(seconds);choice.setText(seconds+" sec");choice.setTextSize(13);choice.setTextColor(IVORY);
+            choice.setMinHeight(dp(48));intervals.addView(choice,weighted(1,dp(48)));
+        }
+        intervals.check(AudioSettings.interval(this));
+        intervals.setOnCheckedChangeListener((group,id)->p.edit().putInt("cue_seconds",id).apply());f.body.addView(intervals);
+        f.label("Mute overrides both announcement settings. It does not change your phone’s volume or silence other apps.");
+        f.item("Workout history","Review saved sessions",()->{f.dismiss();showHistory();});
+        f.label("Tempo 0.9.0\nIndependent app. Not affiliated with or endorsed by WHOOP.");
+        f.show();
+    }
+    private void showHistory() {
+        FormSheet f=new FormSheet(this,"Workout history","Saved on this phone only. Pauses and missing sensor time are not counted as training.");
+        try {
+            org.json.JSONArray records=SessionStore.history(this);
+            if(records.length()==0)f.label("Your completed and stopped sessions will appear here.");
+            for(int i=0;i<records.length();i++){
+                org.json.JSONObject record=records.getJSONObject(i);
+                TrainingSession s=TrainingSession.restore(record.toString());
+                String date=java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,java.text.DateFormat.SHORT).format(new java.util.Date(s.started));
+                f.item(s.plan.name,date+"\n"+formatTime(s.elapsed/1000)+" active · "+s.outcome,()->{f.dismiss();showSessionDetail(s);});
+            }
+        }catch(Exception e){f.label("History could not be read. Your saved data has not been changed.");}
+        f.show();
+    }
+    private void showSessionDetail(TrainingSession s) {
+        FormSheet f=new FormSheet(this,s.plan.name,s.outcome.equals("completed")?"Completed session":"Stopped session");
+        f.label("Active time: "+formatTime(s.elapsed/1000)+"\nTime in target: "+formatTime(s.target/1000)
+            +"\nAverage: "+s.average()+" bpm · Peak: "+s.peak+" bpm");
+        f.label("Time in each zone");
+        for(int i=0;i<5;i++)f.label("Zone "+(i+1)+" ("+s.zones[i][0]+"–"+s.zones[i][1]+" bpm): "+formatTime(s.zoneMillis[i]/1000));
+        f.label("Planned versus actual stages");
+        for(int i=0;i<s.plan.phases.length;i++){
+            WorkoutPlan.Phase stage=s.plan.phases[i];
+            f.label(stage.name+" · Zone "+stage.zone+"\nPlanned "+formatTime(stage.seconds)+" / Actual "+formatTime(s.stageMillis[i]/1000)
+                +" / In target "+formatTime(s.stageTarget[i]/1000));
+        }
+        TextView error=f.error();
+        f.action("Delete session",false,()->new AlertDialog.Builder(this).setTitle("Delete this session?")
+            .setMessage("This removes only this history entry. Your saved workout template is unchanged.")
+            .setPositiveButton("Delete",(d,w)->{try{SessionStore.delete(this,s.id);f.dismiss();showHistory();}catch(Exception e){error.setText("Could not delete session.");}})
+            .setNegativeButton("Cancel",null).show());
+        f.show();
+    }
+    private void beginBackgroundSession() {
+        try {
+            String address = getPreferences(MODE_PRIVATE).getString("last_whoop_address", null);
+            if (address == null) { openSensor();return; }
+            int[][] ranges=new int[5][2];for(int i=0;i<5;i++)ranges[i]=zoneRange(i+1);
+            TrainingSession s=new TrainingSession(workouts[selectedWorkout], ranges, address, phaseIndex);
+            launchSession(s, true);
+        } catch (Exception e) { Toast.makeText(this, "Could not start workout: "+e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+    private void launchSession(TrainingSession s, boolean fresh) throws Exception {
+        if (WorkoutService.instance != null) return;
+        SessionStore.checkpoint(this,s);
+        stopScan();closeGatt();
+        WorkoutService.latest=null;displayedSession=null;serviceStarting=true;
+        startForegroundService(new android.content.Intent(this,WorkoutService.class)
+            .putExtra("session",s.json().toString()).putExtra("new",fresh));
+        handler.postDelayed(()->{if(WorkoutService.instance==null){serviceStarting=false;setConnection("Training service unavailable. Reopen Tempo to resume.",false);}},2000);
     }
 
     private void resetWorkout() {
+        if (serviceStarting) return;
+        if (WorkoutService.instance != null && WorkoutService.latest != null && !WorkoutService.latest.done) {
+            new AlertDialog.Builder(this).setTitle("Stop and save this session?")
+                .setMessage("Your progress will be saved to History as a stopped workout.")
+                .setPositiveButton("Stop & save",(d,w)->{if(WorkoutService.instance!=null)WorkoutService.instance.finish();syncSession();})
+                .setNegativeButton("Keep training",null).show();return;
+        }
+        WorkoutService.latest=null;displayedSession=null;
         sessionRunning = sessionPaused = false;
-        handler.removeCallbacks(workoutTicker);
         phaseIndex = 0;
         targetMillis = heartRateSum = 0;
         heartRateSamples = peakHeartRate = 0;
@@ -468,58 +595,27 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     }
 
     private void jumpToStage(int index) {
+        if (serviceStarting) return;
+        if (WorkoutService.instance != null && WorkoutService.latest != null && !WorkoutService.latest.done) {
+            WorkoutService.instance.jump(index);syncSession();return;
+        }
         WorkoutPlan plan = workouts[selectedWorkout];
         if (index < 0 || index >= plan.phases.length) return;
-        boolean wasComplete = phaseIndex >= plan.phases.length;
+        WorkoutService.latest=null;displayedSession=null;
+        sessionRunning=sessionPaused=false;
         phaseIndex = index;
         long now = SystemClock.elapsedRealtime();
         phaseStartedAt = now;
         pausedAt = now;
         lastMetricAt = now;
-        if (wasComplete) {
-            // Revisit a completed session without erasing its accumulated metrics.
-            sessionRunning = true;
-            sessionPaused = true;
-        }
-        if (sessionRunning && currentBpm == 0) sessionPaused = true;
-        if (sessionRunning) {
-            primaryButton.setText(sessionPaused ? "Resume" : "Pause");
-            workoutButton.setEnabled(false); zonesButton.setEnabled(false);
-            handler.removeCallbacks(workoutTicker);
-            handler.postDelayed(workoutTicker, 200);
-            if (!sessionPaused) announcePhase();
-        }
-        renderState();
-    }
-
-    private void updateWorkout() {
-        if (!sessionRunning || sessionPaused) { renderState(); return; }
-        long now = SystemClock.elapsedRealtime();
-        WorkoutPlan plan = workouts[selectedWorkout];
-        while (phaseIndex < plan.phases.length
-                && now - phaseStartedAt >= plan.phases[phaseIndex].seconds * 1000L) {
-            phaseStartedAt += plan.phases[phaseIndex].seconds * 1000L;
-            phaseIndex++;
-            if (phaseIndex >= plan.phases.length) { finishWorkout(); return; }
-            announcePhase();
-        }
-        if (currentBpm > 0 && now - lastMetricAt >= 1000) {
-            long sampleDuration = now - lastMetricAt;
-            int[] range = zoneRange(currentPhase().zone);
-            if (currentBpm >= range[0] && currentBpm <= range[1]) targetMillis += sampleDuration;
-            heartRateSum += currentBpm;
-            heartRateSamples++;
-            peakHeartRate = Math.max(peakHeartRate, currentBpm);
-            lastMetricAt = now;
-        } else if (currentBpm == 0) {
-            lastMetricAt = now;
-        }
         renderState();
     }
 
     private void finishWorkout() {
+        if (WorkoutService.instance != null && WorkoutService.latest != null && !WorkoutService.latest.done) {
+            WorkoutService.instance.finish();syncSession();return;
+        }
         sessionRunning = sessionPaused = false;
-        handler.removeCallbacks(workoutTicker);
         primaryButton.setText("Start again");
         workoutButton.setEnabled(true);
         zonesButton.setEnabled(true);
@@ -562,7 +658,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         inZoneValue.setText(formatTime(targetMillis / 1000));
         averageValue.setText(average == 0 ? "—" : String.valueOf(average));
         peakValue.setText(peakHeartRate == 0 ? "—" : String.valueOf(peakHeartRate));
-        nextText.setText(finished ? "Session complete · tap a stage to revisit it"
+        nextText.setText(finished ? "Session saved · select a stage to train again"
                 : "Stage " + (phaseIndex + 1) + "/" + plan.phases.length + " · " + phase.name);
         String key = selectedWorkout + ":" + phaseIndex;
         if (!key.equals(stageKey)) {
@@ -614,6 +710,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     private WorkoutPlan.Phase currentPhase() { return workouts[selectedWorkout].phases[phaseIndex]; }
 
     private int[] zoneRange(int zone) {
+        if (displayedSession != null && sessionRunning) return displayedSession.zones[zone-1].clone();
         if (useCustomZones && customZones != null) return customZones[zone - 1].clone();
         int reserve = maxHr - restingHr;
         int low = Math.round(restingHr + reserve * (.4f + zone * .1f));
@@ -629,7 +726,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     }
 
     private void announce(String message) {
-        if (speechReady && textToSpeech != null)
+        if (!AudioSettings.muted(this) && speechReady && textToSpeech != null)
             textToSpeech.speak(message, TextToSpeech.QUEUE_FLUSH, null, "training-cue");
     }
 
@@ -645,7 +742,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         if (bluetoothAdapter == null) return;
         String[] permissions = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                 ? new String[]{Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT}
-                : new String[]{Manifest.permission.ACCESS_FINE_LOCATION};
+                : new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
         for (String permission : permissions) {
             if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(permissions, PERMISSION_REQUEST);
@@ -657,6 +754,9 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 43) {
+            Toast.makeText(this, "Tap Start to begin. Notification controls require notification permission.", Toast.LENGTH_LONG).show();return;
+        }
         if (requestCode != PERMISSION_REQUEST) return;
         for (int result : grantResults) if (result != PackageManager.PERMISSION_GRANTED) {
             setConnection("Bluetooth permission required", false);
@@ -672,7 +772,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     private final Runnable staleCheck = new Runnable() {
         public void run() {
             if (destroyed) return;
-            if (currentBpm > 0 && SystemClock.elapsedRealtime() - lastHrAt > 6000) {
+            if (WorkoutService.instance == null && !serviceStarting && currentBpm > 0 && SystemClock.elapsedRealtime() - lastHrAt > 6000) {
                 currentBpm = 0;
                 setConnection("Signal lost · reconnect sensor", false);
                 if (sessionRunning && !sessionPaused) toggleWorkout();
@@ -683,6 +783,12 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     };
 
     private void openSensor() {
+        if (WorkoutService.instance != null && WorkoutService.latest != null && !WorkoutService.latest.done) {
+            FormSheet f=new FormSheet(this,"Training sensor",WorkoutService.status);
+            f.label("The workout reconnects automatically. Short signal drops pause the timer; after 30 seconds, tap Resume once readings return.");
+            f.action("Retry connection",true,()->{if(WorkoutService.instance!=null)WorkoutService.instance.retry();f.dismiss();});
+            f.show();return;
+        }
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(24), dp(20), dp(24), dp(24));
@@ -810,7 +916,9 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     }
 
     private void reconnectAutomatically() {
+        handler.removeCallbacks(staleCheck);
         handler.post(staleCheck);
+        if (WorkoutService.instance != null || serviceStarting) return;
         if (destroyed || bluetoothAdapter == null || !hasBluetoothPermission()) return;
         try {
             if (!bluetoothAdapter.isEnabled()) return;
@@ -827,13 +935,15 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
                     failConnection("Disconnected (" + status + ") · tap Sensor to reconnect");
                 } else if (state == BluetoothProfile.STATE_CONNECTED) {
                     setConnection("Connected · reading heart-rate service…", false);
-                    if (!link.discoverServices()) failConnection("Service discovery failed · retry");
+                    try {if (!link.discoverServices()) failConnection("Service discovery failed · retry");}
+                    catch(SecurityException e){failConnection("Bluetooth permission required · reopen Sensor");}
                 }
             });
         }
         @Override public void onServicesDiscovered(BluetoothGatt link, int status) {
             runOnUiThread(() -> {
                 if (destroyed || link != gatt) return;
+                try {
                 BluetoothGattService service = status == 0 ? link.getService(HEART_RATE_SERVICE) : null;
                 BluetoothGattCharacteristic hr = service == null ? null : service.getCharacteristic(HEART_RATE_MEASUREMENT);
                 if (hr == null) { failConnection("HR Broadcast is unavailable on this sensor"); return; }
@@ -845,10 +955,11 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
                 byte[] enable = notify ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                         : BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
                 boolean accepted;
-                if (Build.VERSION.SDK_INT >= 33) accepted = link.writeDescriptor(descriptor, enable) == 0;
+                if (Build.VERSION.SDK_INT >= 33) accepted = link.writeDescriptor(descriptor, enable) == android.bluetooth.BluetoothStatusCodes.SUCCESS;
                 else { descriptor.setValue(enable); accepted = link.writeDescriptor(descriptor); }
                 if (!accepted) failConnection("Subscription could not start · retry");
                 else setConnection("Enabling live heart rate…", false);
+                } catch(SecurityException e){failConnection("Bluetooth permission required · reopen Sensor");}
             });
         }
         @Override public void onDescriptorWrite(BluetoothGatt link, BluetoothGattDescriptor descriptor, int status) {
@@ -883,13 +994,13 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
 
     private String safeDeviceName(BluetoothDevice device, ScanResult result) {
         String name = result == null || result.getScanRecord() == null ? null : result.getScanRecord().getDeviceName();
-        if ((name == null || name.trim().isEmpty()) && hasBluetoothPermission()) name = device.getName();
+        try {if ((name == null || name.trim().isEmpty()) && hasBluetoothPermission()) name = device.getName();}
+        catch(SecurityException ignored){}
         return name == null || name.trim().isEmpty() ? "Heart-rate device" : name;
     }
 
     private void setConnection(String message, boolean connected) {
         runOnUiThread(() -> {
-            android.util.Log.i("WhoopHR", message);
             if (sensorStatus != null) sensorStatus.setText(message);
             connectionText.setText(message);
             connectionText.setTextColor(connected ? CYAN : MUTED);
@@ -907,20 +1018,24 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         gatt = null;
         if (old != null) {
             try { old.disconnect(); } catch (SecurityException ignored) { }
-            old.close();
+            try {old.close();} catch(SecurityException ignored){}
         }
     }
 
     @Override protected void onStop() {
-        if (sessionRunning && !sessionPaused) toggleWorkout();
+        // Active training belongs to WorkoutService, not this Activity's lifecycle.
+        handler.removeCallbacks(serviceRefresh);
         super.onStop();
+    }
+
+    @Override protected void onStart() {
+        super.onStart();handler.removeCallbacks(serviceRefresh);handler.post(serviceRefresh);
     }
 
     @Override protected void onDestroy() {
         destroyed = true;
         handler.removeCallbacksAndMessages(null);
         handler.removeCallbacks(stopScanRunnable);
-        handler.removeCallbacks(workoutTicker);
         stopScan(); closeGatt();
         if (textToSpeech != null) { textToSpeech.stop(); textToSpeech.shutdown(); }
         super.onDestroy();
@@ -941,13 +1056,6 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         background.setCornerRadius(dp(14));
         background.setColor(selected ? CYAN : PANEL);
         background.setStroke(dp(1), selected ? CYAN : Color.rgb(49, 68, 72));
-        if (glassTheme) {
-            background.setCornerRadius(dp(20));
-            background.setOrientation(GradientDrawable.Orientation.TL_BR);
-            background.setColors(selected ? new int[]{0xff82f2d3, 0xff4bbba9}
-                    : new int[]{0x99415869, 0x66182738});
-            background.setStroke(dp(1), selected ? 0xffb0ffe7 : 0x527e97a7);
-        }
         button.setBackground(new android.graphics.drawable.RippleDrawable(
                 ColorStateList.valueOf(0x3066ecc4), background, null));
         button.setTextColor(selected ? NIGHT : IVORY);

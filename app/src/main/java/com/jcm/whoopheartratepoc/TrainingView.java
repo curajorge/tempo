@@ -15,8 +15,6 @@ final class TrainingView extends View {
     private final ArrayList<Integer> history = new ArrayList<>();
     private long lastHistory;
     private int[][] zones;
-    private boolean glass;
-    void setGlass(boolean value) { glass = value; invalidate(); }
     void setZones(int[][] zones) { this.zones = zones; }
     private final int bg = Color.rgb(10,17,29), ink = Color.rgb(242,247,255),
             muted = Color.rgb(137,157,179), mint = Color.rgb(102,236,196);
@@ -38,17 +36,8 @@ final class TrainingView extends View {
     }
     @Override protected void onDraw(Canvas c) {
         float scale=Math.min(getWidth()/360f,getHeight()/310f);
-        if (!glass) c.drawColor(bg); c.save();
+        c.drawColor(bg); c.save();
         c.translate((getWidth()-360*scale)/2,(getHeight()-310*scale)/2);c.scale(scale,scale);
-        if (glass) {
-            p.setStyle(Paint.Style.FILL);
-            p.setShader(new LinearGradient(0, 0, 360, 310, 0x554c6578, 0x22152536, Shader.TileMode.CLAMP));
-            c.drawRoundRect(new RectF(2,2,358,308), 32,32,p);
-            p.setShader(new RadialGradient(180,215,150,new int[]{0x403ed3ba,0x003ed3ba},null,Shader.TileMode.CLAMP));
-            c.drawRoundRect(new RectF(2,2,358,308),32,32,p);
-            p.setShader(null);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1);p.setColor(0x507c9baa);
-            c.drawRoundRect(new RectF(2,2,358,308),32,32,p);
-        }
         if(mode==DRIVE) dial(c); else pulse(c);
         c.restore();
     }
@@ -62,7 +51,7 @@ final class TrainingView extends View {
             double a=Math.toRadians(140+i*52+23);
             text(c,""+(i+1),cx+(float)Math.cos(a)*143,cy+(float)Math.sin(a)*143+4,11,i+1==zone?colors[i]:muted);
         }
-        for(int i=0;i<=50 && !glass;i++){
+        for(int i=0;i<=50;i++){
             double a=Math.toRadians(140+i*5.2);
             float inner=i%5==0?99:105;
             p.setColor(i%5==0?0xff61768e:0xff2a3b51);p.setStrokeWidth(1);

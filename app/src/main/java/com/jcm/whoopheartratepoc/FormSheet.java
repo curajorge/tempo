@@ -16,7 +16,7 @@ final class FormSheet extends Dialog {
     private final Activity activity;
     FormSheet(Activity activity, String title, String subtitle) {
         super(activity); this.activity=activity; requestWindowFeature(Window.FEATURE_NO_TITLE);
-        LinearLayout root=new LinearLayout(activity); root.setOrientation(1);
+        LinearLayout root=new LinearLayout(activity); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(22),dp(16),dp(22),dp(16));root.setBackground(shape(BG,24));
         LinearLayout header=new LinearLayout(activity);header.setGravity(Gravity.CENTER_VERTICAL);
         TextView heading=text(title,24,INK);heading.setTypeface(activity.getResources().getFont(R.font.geist_medium));
@@ -26,9 +26,9 @@ final class FormSheet extends Dialog {
         root.addView(header);
         if (!subtitle.isEmpty()) {TextView sub=text(subtitle,14,MUTED);sub.setPadding(0,dp(10),0,dp(16));root.addView(sub);}
         ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(false);
-        body=new LinearLayout(activity);body.setOrientation(1);
+        body=new LinearLayout(activity);body.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-        actions=new LinearLayout(activity);actions.setOrientation(1);actions.setPadding(0,dp(12),0,0);root.addView(actions);
+        actions=new LinearLayout(activity);actions.setOrientation(LinearLayout.VERTICAL);actions.setPadding(0,dp(12),0,0);root.addView(actions);
         setContentView(root);
         Window window=getWindow();
         if(window!=null) {
