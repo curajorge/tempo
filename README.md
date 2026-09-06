@@ -174,6 +174,14 @@ credentials, or unredacted phone logs in issues or pull requests.
 
 ## License
 
-Project code and original artwork are available under the [MIT License](LICENSE).
+Current project code and original artwork are source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Personal and other qualifying
+noncommercial use, modification, and redistribution are allowed; commercial use
+requires a [separate license](COMMERCIAL_LICENSE.md) from the copyright holder.
+This is not an OSI-approved open-source license.
+
+Commit `35af5fe` and earlier were published under MIT. Rights already received
+under that license are not withdrawn by this change.
+
 Bundled Geist fonts have their own SIL Open Font License; see
 [third-party notices](THIRD_PARTY_NOTICES.md). Trademark rights are not granted.

@@ -14,5 +14,13 @@ Before submitting:
 
 Preserve the existing Android application ID so upgrades retain local data.
 Keep tests isolated from real user preferences. State what was and was not tested
-in your pull request. Contributions are under the project's MIT license;
-third-party assets must retain their own required notices.
+in your pull request.
+
+By submitting a contribution, you license it under the project's current
+PolyForm Noncommercial terms. You also grant Jorge Cura a perpetual, worldwide,
+non-exclusive, royalty-free license to use, reproduce, modify, distribute,
+sublicense, and commercially license that contribution as part of Tempo and its
+derivatives. You represent that you have the right to grant those permissions.
+If you are not comfortable with that, do not submit the contribution.
+
+Third-party assets must retain their required notices.

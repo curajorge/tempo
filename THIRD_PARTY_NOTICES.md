@@ -17,5 +17,5 @@ and Android build dependencies retain their respective upstream licenses.
 ## Names and artwork
 
 Tempo's original icon source is in `design/tempo-icon.svg` and is covered by the
-project license. WHOOP and other third-party names identify devices/services;
+current project license. WHOOP and other third-party names identify devices/services;
 their trademarks belong to their respective owners. No endorsement is implied.
