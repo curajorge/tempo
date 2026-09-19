@@ -58,6 +58,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     private static final int CYAN = Color.rgb(102, 236, 196);
     private static final int AMBER = Color.rgb(255, 138, 61);
     private static final int CORAL = Color.rgb(237, 76, 92);
+    private static final int[] ZONE_COLORS = {0xff76a3d8, 0xff66ecc4, 0xffd5e780, 0xffffb969, 0xffff748a};
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, BluetoothDevice> devices = new LinkedHashMap<>();
@@ -225,6 +226,8 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         phasePanel.setBackground(surface(PANEL, 20));
         LinearLayout phaseRow = row();
         targetText = label("", 16, IVORY); targetText.setGravity(Gravity.CENTER_VERTICAL);
+        targetText.setSingleLine(true);targetText.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        targetText.setAutoSizeTextTypeUniformWithConfiguration(11,16,1,android.util.TypedValue.COMPLEX_UNIT_SP);
         countdownText = label("", 28, IVORY); countdownText.setGravity(Gravity.END);
         countdownText.setTypeface(getResources().getFont(R.font.geist_medium));
         countdownText.setFontFeatureSettings("tnum");
@@ -234,8 +237,13 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         phaseRow.addView(countdownText, weighted(1, dp(42)));
         phasePanel.addView(phaseRow);
         cueText = label("", 14, CYAN); phasePanel.addView(cueText);
-        nextText = label("", 12, MUTED); nextText.setPadding(0, dp(9), 0, 0);
-        phasePanel.addView(nextText); root.addView(phasePanel);
+        nextText = label("", 14, IVORY);
+        nextText.setTypeface(getResources().getFont(R.font.geist_medium));
+        nextText.setGravity(Gravity.CENTER_VERTICAL);nextText.setSingleLine(true);
+        nextText.setAutoSizeTextTypeUniformWithConfiguration(11,14,1,android.util.TypedValue.COMPLEX_UNIT_SP);
+        nextText.setPadding(dp(12),0,dp(12),0);
+        LinearLayout.LayoutParams upcoming=new LinearLayout.LayoutParams(-1,dp(48));upcoming.topMargin=dp(12);
+        phasePanel.addView(nextText,upcoming); root.addView(phasePanel);
         LinearLayout navigation = row();
         navigation.setPadding(0, dp(10), 0, 0);
         previousStage = button("Previous", false);
@@ -507,6 +515,19 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         FormSheet f=new FormSheet(this,"Settings","Your preferences are saved automatically, including during a workout.");
         settingsSwitch(f,"Mute all audio","Silences every Tempo cue, including connection alerts. Training continues normally.",AudioSettings.muted(this),this::setMuted);
         settingsSwitch(f,"Stage announcements","Hear the next stage and its target BPM range.",AudioSettings.stages(this),on->p.edit().putBoolean("stage_audio",on).apply());
+        f.label("Transition countdown");
+        android.widget.RadioGroup countdowns=new android.widget.RadioGroup(this);
+        countdowns.setOrientation(LinearLayout.HORIZONTAL);
+        int[] countdownValues={0,3,5};String[] countdownLabels={"Off","3 sec","5 sec"};
+        for(int i=0;i<countdownValues.length;i++){
+            android.widget.RadioButton choice=new android.widget.RadioButton(this);
+            choice.setId(1000+countdownValues[i]);choice.setText(countdownLabels[i]);choice.setTextSize(13);choice.setTextColor(IVORY);
+            choice.setMinHeight(dp(48));countdowns.addView(choice,weighted(1,dp(48)));
+        }
+        countdowns.check(1000+AudioSettings.countdown(this));
+        countdowns.setOnCheckedChangeListener((group,id)->p.edit().putInt("transition_countdown",id-1000).apply());
+        f.body.addView(countdowns);
+        f.label("When enabled, Tempo previews the next zone and target, then calls each number on its real second boundary.");
         settingsSwitch(f,"Zone guidance","Hear when to ease off or increase effort after a sustained deviation.",AudioSettings.zones(this),on->p.edit().putBoolean("zone_audio",on).apply());
         f.label("Minimum time between zone reminders");
         android.widget.RadioGroup intervals=new android.widget.RadioGroup(this);
@@ -518,9 +539,9 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         }
         intervals.check(AudioSettings.interval(this));
         intervals.setOnCheckedChangeListener((group,id)->p.edit().putInt("cue_seconds",id).apply());f.body.addView(intervals);
-        f.label("Mute overrides both announcement settings. It does not change your phone’s volume or silence other apps.");
+        f.label("Mute overrides all coaching audio. It does not change your phone’s volume or silence other apps.");
         f.item("Workout history","Review saved sessions",()->{f.dismiss();showHistory();});
-        f.label("Tempo 0.9.0\nIndependent app. Not affiliated with or endorsed by WHOOP.");
+        f.label("Tempo 0.10.0\nIndependent app. Not affiliated with or endorsed by WHOOP.");
         f.show();
     }
     private void showHistory() {
@@ -647,7 +668,8 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         if (!sessionRunning) cue = finished ? "COMPLETE" : currentBpm == 0 ? "CONNECT SENSOR" : "READY";
         if (finished) { progress = 1; secondsLeft = 0; }
         if (!sessionRunning) primaryButton.setText(currentBpm == 0 ? "Connect to start" : finished ? "Train again" : "Start workout");
-        targetText.setText("Zone " + phase.zone + "   /   " + range[0] + "–" + range[1] + " bpm");
+        targetText.setText(phase.name+" · Zone "+phase.zone+" · "+range[0]+"–"+range[1]+" bpm");
+        targetText.setContentDescription("Current stage "+phase.name+", zone "+phase.zone+", target "+range[0]+" to "+range[1]+" beats per minute");
         countdownText.setText(formatTime(secondsLeft));
         cueText.setText(prettyCue(cue));
         cueText.setTextColor(cueColor(cue));
@@ -658,8 +680,24 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         inZoneValue.setText(formatTime(targetMillis / 1000));
         averageValue.setText(average == 0 ? "—" : String.valueOf(average));
         peakValue.setText(peakHeartRate == 0 ? "—" : String.valueOf(peakHeartRate));
-        nextText.setText(finished ? "Session saved · select a stage to train again"
-                : "Stage " + (phaseIndex + 1) + "/" + plan.phases.length + " · " + phase.name);
+        if(finished){
+            nextText.setText("Session saved · select a stage to train again");
+            nextText.setTextColor(MUTED);nextText.setBackground(surface(NIGHT,12));
+            nextText.setContentDescription("Session saved. Select a stage to train again.");
+        }else if(phaseIndex+1<plan.phases.length){
+            WorkoutPlan.Phase next=plan.phases[phaseIndex+1];int color=ZONE_COLORS[next.zone-1];
+            boolean approaching=sessionRunning && !sessionPaused && secondsLeft<=10;
+            String prefix=approaching?"Up next in "+formatTime(secondsLeft):"Up next";
+            nextText.setText(prefix+"   "+next.name+" · Zone "+next.zone+" · "+formatTime(next.seconds));
+            nextText.setTextColor(color);
+            GradientDrawable upcoming=surface(NIGHT,12);upcoming.setStroke(dp(approaching?2:1),color);nextText.setBackground(upcoming);
+            nextText.setContentDescription(prefix+", "+next.name+", zone "+next.zone+", "+formatTime(next.seconds));
+        }else{
+            nextText.setText("Final stage · workout ends next");
+            nextText.setTextColor(MUTED);GradientDrawable upcoming=surface(NIGHT,12);
+            upcoming.setStroke(dp(1),0xff33485f);nextText.setBackground(upcoming);
+            nextText.setContentDescription("Final stage. The workout ends next.");
+        }
         String key = selectedWorkout + ":" + phaseIndex;
         if (!key.equals(stageKey)) {
         stageKey = key;

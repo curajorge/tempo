@@ -9,4 +9,5 @@ final class AudioSettings {
     static boolean stages(Context c){return prefs(c).getBoolean("stage_audio",true);}
     static boolean zones(Context c){return prefs(c).getBoolean("zone_audio",true);}
     static int interval(Context c){int v=prefs(c).getInt("cue_seconds",45);return v==30||v==60?v:45;}
+    static int countdown(Context c){int v=prefs(c).getInt("transition_countdown",0);return v==3||v==5?v:0;}
 }

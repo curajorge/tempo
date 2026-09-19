@@ -8,11 +8,19 @@ final class SessionChecks {
     static int run(Context isolated) throws Exception {
         count=0;
         AudioSettings.prefs(isolated).edit().clear().commit();
-        ok(!AudioSettings.muted(isolated) && AudioSettings.stages(isolated) && AudioSettings.zones(isolated),"audio defaults");
-        AudioSettings.prefs(isolated).edit().putBoolean("muted",true).putBoolean("stage_audio",false).putInt("cue_seconds",60).commit();
-        ok(AudioSettings.muted(isolated) && !AudioSettings.stages(isolated) && AudioSettings.interval(isolated)==60,"audio preferences persist independently");
-        AudioSettings.prefs(isolated).edit().putInt("cue_seconds",0).commit();
-        ok(AudioSettings.interval(isolated)==45,"invalid audio interval falls back");
+        ok(!AudioSettings.muted(isolated) && AudioSettings.stages(isolated) && AudioSettings.zones(isolated)
+                && AudioSettings.countdown(isolated)==0,"audio defaults");
+        AudioSettings.prefs(isolated).edit().putBoolean("muted",true).putBoolean("stage_audio",false)
+                .putInt("cue_seconds",60).putInt("transition_countdown",3).commit();
+        ok(AudioSettings.muted(isolated) && !AudioSettings.stages(isolated) && AudioSettings.interval(isolated)==60
+                && AudioSettings.countdown(isolated)==3,"audio preferences persist independently");
+        AudioSettings.prefs(isolated).edit().putInt("cue_seconds",0).putInt("transition_countdown",4).commit();
+        ok(AudioSettings.interval(isolated)==45 && AudioSettings.countdown(isolated)==0,"invalid audio values fall back");
+        ok(TransitionCues.countdownNumber(3001,3)==0 && TransitionCues.countdownNumber(3000,3)==3
+                && TransitionCues.countdownNumber(2000,3)==2 && TransitionCues.countdownNumber(1000,3)==1,
+                "transition numbers follow real second boundaries");
+        ok(TransitionCues.previewThreshold(3)==10000 && TransitionCues.previewThreshold(0)==0,
+                "transition preview timing");
         AudioSettings.prefs(isolated).edit().clear().commit();
         SessionStore.prefs(isolated).edit().clear().commit();
         WorkoutPlan p=new WorkoutPlan("Session test",new WorkoutPlan.Phase("Warm",1,10),new WorkoutPlan.Phase("Cruise",2,10));

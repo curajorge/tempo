@@ -24,7 +24,8 @@ public final class WorkoutService extends Service {
     };
     private PowerManager.WakeLock wake;
     private long lastSave, lastNotice, lastCue, directionSince, nextConnect, connectAt, serviceStarted;
-    private int attempts, direction, announcedStage=-1;
+    private int attempts, direction, announcedStage=-1, transitionStage=-1, spokenCountdown;
+    private boolean transitionPreviewSpoken;
     private static final UUID HR=uuid("180d"), MEASUREMENT=uuid("2a37"), CCC=uuid("2902");
     private static UUID uuid(String s){return UUID.fromString("0000"+s+"-0000-1000-8000-00805f9b34fb");}
     @Override public IBinder onBind(Intent i){return null;}
@@ -76,7 +77,7 @@ public final class WorkoutService extends Service {
     }
     void jump(int index){
         if(latest==null || latest.done)return;
-        latest.jump(index,SystemClock.elapsedRealtime());announcedStage=-1;persist();updateNotification();
+        latest.jump(index,SystemClock.elapsedRealtime());announcedStage=-1;resetTransition();persist();updateNotification();
     }
     void finish(){if(latest!=null){latest.finish(SystemClock.elapsedRealtime());complete();}}
     void retry(){
@@ -104,8 +105,9 @@ public final class WorkoutService extends Service {
             if(!speechReady)return;
             WorkoutPlan.Phase p=latest.plan.phases[latest.stage];int[] r=latest.zones[p.zone-1];
             if(AudioSettings.stages(this))say(p.name+". Zone "+p.zone+". Target "+r[0]+" to "+r[1]+" beats per minute.");
-            announcedStage=latest.stage;lastCue=now;direction=0;return;
+            announcedStage=latest.stage;resetTransition();lastCue=now;direction=0;return;
         }
+        if(transition(now))return;
         if(!AudioSettings.zones(this))return;
         int[] r=latest.zones[latest.plan.phases[latest.stage].zone-1];
         // Small boundary tolerance + sustained deviation + cooldown prevents chatter.
@@ -116,6 +118,26 @@ public final class WorkoutService extends Service {
             say(direction>0?"Above target. Ease off gently.":"Below target. Increase your effort gradually if comfortable.");lastCue=now;
         }
     }
+    private boolean transition(long now){
+        int seconds=AudioSettings.countdown(this);
+        if(seconds==0 || latest.stage+1>=latest.plan.phases.length)return false;
+        if(transitionStage!=latest.stage){resetTransition();transitionStage=latest.stage;}
+        long remaining=latest.remaining();
+        long previewAt=TransitionCues.previewThreshold(seconds);
+        if(!transitionPreviewSpoken && remaining>seconds*1000L && remaining<=previewAt){
+            WorkoutPlan.Phase current=latest.plan.phases[latest.stage];
+            WorkoutPlan.Phase next=latest.plan.phases[latest.stage+1];int[] target=latest.zones[next.zone-1];
+            say("Zone "+current.zone+" ending. Zone "+next.zone+" coming up. Target "+target[0]+" to "+target[1]+".");
+            transitionPreviewSpoken=true;lastCue=now;direction=0;return true;
+        }
+        int number=TransitionCues.countdownNumber(remaining,seconds);
+        if(number>0 && number!=spokenCountdown){
+            say(number==seconds?"In "+number:String.valueOf(number));spokenCountdown=number;lastCue=now;direction=0;
+        }
+        // Keep ordinary zone reminders from interrupting the transition preview/countdown.
+        return remaining<=previewAt;
+    }
+    private void resetTransition(){transitionStage=-1;spokenCountdown=0;transitionPreviewSpoken=false;}
     private void say(String text){if(!AudioSettings.muted(this) && speechReady && speech!=null)speech.speak(text,TextToSpeech.QUEUE_FLUSH,null,"tempo-coach");}
     private void persist(){try{SessionStore.checkpoint(this,latest);}catch(Exception e){status="Session could not be saved. Keep Tempo open.";}}
     private void complete(){

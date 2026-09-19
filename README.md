@@ -18,8 +18,14 @@ The app uses a dark Classic theme. **Mute audio / Unmute audio** is available ne
 training screen. Master mute stops current speech and suppresses all subsequent
 Tempo speech, including connection alerts, without pausing the workout or changing
 the phone's volume. **Settings** saves master mute, stage announcements, zone
-guidance, and 30/45/60-second reminder spacing independently. Muting overrides
+guidance, transition countdowns, and 30/45/60-second reminder spacing independently. Muting overrides
 the individual announcement settings, including during screen-off sessions.
+
+The current-stage panel always previews the following stage, including its name,
+zone, duration, and zone color. In the final 10 seconds it becomes a live visual
+countdown. Optional verbose transition audio previews the next zone and BPM target,
+then speaks a clock-driven 3–2–1 or 5–4–3–2–1 countdown. Configure it under
+**Settings → Transition countdown**; Off preserves the shorter coaching style.
 
 It includes a 90-second test workout, a 20-minute Zone 2 workout, a 30-minute
 progressive workout, editable zone BPM ranges, spoken phase changes, and live
