@@ -9,11 +9,12 @@ final class SessionChecks {
         count=0;
         AudioSettings.prefs(isolated).edit().clear().commit();
         ok(!AudioSettings.muted(isolated) && AudioSettings.stages(isolated) && AudioSettings.zones(isolated)
+                && !AudioSettings.predictive(isolated)
                 && AudioSettings.countdown(isolated)==0,"audio defaults");
         AudioSettings.prefs(isolated).edit().putBoolean("muted",true).putBoolean("stage_audio",false)
-                .putInt("cue_seconds",60).putInt("transition_countdown",3).commit();
+                .putBoolean("predictive_coaching",true).putInt("cue_seconds",60).putInt("transition_countdown",3).commit();
         ok(AudioSettings.muted(isolated) && !AudioSettings.stages(isolated) && AudioSettings.interval(isolated)==60
-                && AudioSettings.countdown(isolated)==3,"audio preferences persist independently");
+                && AudioSettings.predictive(isolated) && AudioSettings.countdown(isolated)==3,"audio preferences persist independently");
         AudioSettings.prefs(isolated).edit().putInt("cue_seconds",0).putInt("transition_countdown",4).commit();
         ok(AudioSettings.interval(isolated)==45 && AudioSettings.countdown(isolated)==0,"invalid audio values fall back");
         ok(TransitionCues.countdownNumber(3001,3)==0 && TransitionCues.countdownNumber(3000,3)==3

@@ -93,6 +93,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
     private TextView countdownText;
     private TextView cueText;
     private TextView statsText;
+    private TextView forecastText;
     private Button workoutButton;
     private Button zonesButton;
     private Button primaryButton;
@@ -237,6 +238,8 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         phaseRow.addView(countdownText, weighted(1, dp(42)));
         phasePanel.addView(phaseRow);
         cueText = label("", 14, CYAN); phasePanel.addView(cueText);
+        forecastText=label("",12,MUTED);forecastText.setPadding(0,dp(5),0,0);
+        phasePanel.addView(forecastText);
         nextText = label("", 14, IVORY);
         nextText.setTypeface(getResources().getFont(R.font.geist_medium));
         nextText.setGravity(Gravity.CENTER_VERTICAL);nextText.setSingleLine(true);
@@ -529,6 +532,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         f.body.addView(countdowns);
         f.label("When enabled, Tempo previews the next zone and target, then calls each number on its real second boundary.");
         settingsSwitch(f,"Zone guidance","Hear when to ease off or increase effort after a sustained deviation.",AudioSettings.zones(this),on->p.edit().putBoolean("zone_audio",on).apply());
+        settingsSwitch(f,"Predictive coaching (experimental)","Shows a 15-second forecast and speaks before your trend is likely to leave the target zone.",AudioSettings.predictive(this),on->p.edit().putBoolean("predictive_coaching",on).apply());
         f.label("Minimum time between zone reminders");
         android.widget.RadioGroup intervals=new android.widget.RadioGroup(this);
         intervals.setOrientation(LinearLayout.HORIZONTAL);
@@ -541,7 +545,7 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         intervals.setOnCheckedChangeListener((group,id)->p.edit().putInt("cue_seconds",id).apply());f.body.addView(intervals);
         f.label("Mute overrides all coaching audio. It does not change your phone’s volume or silence other apps.");
         f.item("Workout history","Review saved sessions",()->{f.dismiss();showHistory();});
-        f.label("Tempo 0.10.0\nIndependent app. Not affiliated with or endorsed by WHOOP.");
+        f.label("Tempo 0.11.0\nIndependent app. Not affiliated with or endorsed by WHOOP.");
         f.show();
     }
     private void showHistory() {
@@ -673,6 +677,20 @@ public final class MainActivity extends Activity implements TextToSpeech.OnInitL
         countdownText.setText(formatTime(secondsLeft));
         cueText.setText(prettyCue(cue));
         cueText.setTextColor(cueColor(cue));
+        if(sessionRunning && !sessionPaused && AudioSettings.predictive(this) && currentBpm>0){
+            forecastText.setVisibility(android.view.View.VISIBLE);
+            int projected=WorkoutService.predictedBpm;
+            if(projected==0){
+                forecastText.setText("Forecast calibrating from live heart rate…");forecastText.setTextColor(MUTED);
+                forecastText.setContentDescription("Heart rate forecast is calibrating");
+            }else{
+                float trend=WorkoutService.trendBpmPerMinute;
+                String direction=trend>=8?"rising":trend<=-8?"falling":"steady";
+                forecastText.setText("15 sec forecast  "+projected+" bpm · "+direction);
+                forecastText.setTextColor(WorkoutService.predictionRisk>0?CORAL:WorkoutService.predictionRisk<0?AMBER:MUTED);
+                forecastText.setContentDescription("Fifteen second forecast, "+projected+" beats per minute, "+direction);
+            }
+        }else forecastText.setVisibility(android.view.View.GONE);
         int average = heartRateSamples == 0 ? 0 : (int) (heartRateSum / heartRateSamples);
         statsText.setText("In zone  " + formatTime(targetMillis / 1000)
                 + "     Average  " + (average == 0 ? "—" : average)

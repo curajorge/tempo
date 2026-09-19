@@ -14,6 +14,8 @@ public final class WorkoutService extends Service {
     static WorkoutService instance;
     static TrainingSession latest;
     static String status="";
+    static int predictedBpm, predictionRisk;
+    static float trendBpmPerMinute, predictionConfidence;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private BluetoothGatt gatt;
     private BluetoothAdapter adapter;
@@ -23,14 +25,17 @@ public final class WorkoutService extends Service {
         if(AudioSettings.muted(this) && speech!=null)speech.stop();
     };
     private PowerManager.WakeLock wake;
+    private final HeartRatePredictor predictor=new HeartRatePredictor();
     private long lastSave, lastNotice, lastCue, directionSince, nextConnect, connectAt, serviceStarted;
+    private long predictiveSince,lastPredictiveCue;
     private int attempts, direction, announcedStage=-1, transitionStage=-1, spokenCountdown;
+    private int predictiveDirection;
     private boolean transitionPreviewSpoken;
     private static final UUID HR=uuid("180d"), MEASUREMENT=uuid("2a37"), CCC=uuid("2902");
     private static UUID uuid(String s){return UUID.fromString("0000"+s+"-0000-1000-8000-00805f9b34fb");}
     @Override public IBinder onBind(Intent i){return null;}
     @Override public void onCreate(){
-        super.onCreate();instance=this;serviceStarted=SystemClock.elapsedRealtime();
+        super.onCreate();instance=this;serviceStarted=SystemClock.elapsedRealtime();clearPrediction(true);
         AudioSettings.prefs(this).registerOnSharedPreferenceChangeListener(audioListener);
         BluetoothManager manager=getSystemService(BluetoothManager.class);adapter=manager==null?null:manager.getAdapter();
         NotificationManager nm=getSystemService(NotificationManager.class);
@@ -77,7 +82,7 @@ public final class WorkoutService extends Service {
     }
     void jump(int index){
         if(latest==null || latest.done)return;
-        latest.jump(index,SystemClock.elapsedRealtime());announcedStage=-1;resetTransition();persist();updateNotification();
+        latest.jump(index,SystemClock.elapsedRealtime());announcedStage=-1;resetTransition();predictiveDirection=0;clearPrediction(false);persist();updateNotification();
     }
     void finish(){if(latest!=null){latest.finish(SystemClock.elapsedRealtime());complete();}}
     void retry(){
@@ -100,16 +105,18 @@ public final class WorkoutService extends Service {
         handler.postDelayed(this,250);
     }};
     private void coach(long now){
-        if(latest.paused || latest.waiting){direction=0;return;}
+        if(latest.paused || latest.waiting){direction=0;predictiveDirection=0;clearPrediction(false);return;}
         if(announcedStage!=latest.stage){
             if(!speechReady)return;
             WorkoutPlan.Phase p=latest.plan.phases[latest.stage];int[] r=latest.zones[p.zone-1];
             if(AudioSettings.stages(this))say(p.name+". Zone "+p.zone+". Target "+r[0]+" to "+r[1]+" beats per minute.");
-            announcedStage=latest.stage;resetTransition();lastCue=now;direction=0;return;
+            announcedStage=latest.stage;resetTransition();predictiveDirection=0;clearPrediction(false);lastCue=now;direction=0;return;
         }
-        if(transition(now))return;
-        if(!AudioSettings.zones(this))return;
         int[] r=latest.zones[latest.plan.phases[latest.stage].zone-1];
+        updatePrediction(now,r);
+        if(transition(now))return;
+        if(predictiveCue(now))return;
+        if(!AudioSettings.zones(this))return;
         // Small boundary tolerance + sustained deviation + cooldown prevents chatter.
         int next=latest.bpm<r[0]-2?-1:latest.bpm>r[1]+2?1:0;
         if(next!=direction){direction=next;directionSince=now;}
@@ -117,6 +124,31 @@ public final class WorkoutService extends Service {
         if(direction!=0 && now-directionSince>=8000 && now-lastCue>=seconds*1000L){
             say(direction>0?"Above target. Ease off gently.":"Below target. Increase your effort gradually if comfortable.");lastCue=now;
         }
+    }
+    private void updatePrediction(long now,int[] range){
+        if(!AudioSettings.predictive(this)){predictiveDirection=0;clearPrediction(false);return;}
+        HeartRatePredictor.Forecast forecast=predictor.forecast(now);
+        if(!forecast.valid){predictiveDirection=0;clearPrediction(false);return;}
+        predictedBpm=forecast.projected;trendBpmPerMinute=forecast.bpmPerMinute;predictionConfidence=forecast.confidence;
+        int risk=0;
+        if(forecast.confidence>=.35f && latest.bpm>=range[0] && latest.bpm<=range[1]){
+            if(forecast.bpmPerMinute>=12 && forecast.projected>range[1]+2)risk=1;
+            else if(forecast.bpmPerMinute<=-12 && forecast.projected<range[0]-2)risk=-1;
+        }
+        predictionRisk=risk;
+        if(risk!=predictiveDirection){predictiveDirection=risk;predictiveSince=now;}
+    }
+    private boolean predictiveCue(long now){
+        if(predictionRisk==0 || latest.remaining()<=15000)return false;
+        if(now-predictiveSince<2000 || now-lastPredictiveCue<30000 || now-lastCue<5000)return false;
+        int zone=latest.plan.phases[latest.stage].zone;
+        say(predictionRisk>0?"Heart rate is rising. Ease off early to stay in Zone "+zone+"."
+                :"Heart rate is dropping. Add effort early to stay in Zone "+zone+".");
+        lastPredictiveCue=now;lastCue=now;direction=0;return true;
+    }
+    private void clearPrediction(boolean reset){
+        predictedBpm=0;trendBpmPerMinute=0;predictionConfidence=0;predictionRisk=0;
+        if(reset)predictor.reset();
     }
     private boolean transition(long now){
         int seconds=AudioSettings.countdown(this);
@@ -144,7 +176,7 @@ public final class WorkoutService extends Service {
         if(ended)return;
         try{SessionStore.finish(this,latest);saved=true;}
         catch(Exception e){persist();status="History save failed. Reopen Tempo to retry.";}
-        ended=true;closeLink();handler.removeCallbacks(ticker);
+        ended=true;clearPrediction(true);closeLink();handler.removeCallbacks(ticker);
         latest.bpm=0;latest.waiting=true;
         if(saved)status="Session saved · sensor released";
         updateNotification();
@@ -184,6 +216,7 @@ public final class WorkoutService extends Service {
     private void lost(String message){
         if(ended || latest==null)return;
         long now=SystemClock.elapsedRealtime();latest.tick(now);boolean wasWaiting=latest.waiting;latest.lose(now);
+        clearPrediction(true);predictiveDirection=0;
         if(!wasWaiting)say("Sensor disconnected. Workout paused.");
         status=message;closeLink();nextConnect=now+Math.min(30000,2000L<<Math.min(attempts++,4));persist();
     }
@@ -214,7 +247,8 @@ public final class WorkoutService extends Service {
         if(!MEASUREMENT.equals(c.getUuid())||value==null)return;byte[] bytes=value.clone();
         handler.post(()->{
             if(link!=gatt || ended)return;int hr=HeartRatePacket.parse(bytes);if(hr<=0)return;
-            boolean wasWaiting=latest.waiting;latest.sample(hr,SystemClock.elapsedRealtime());attempts=0;
+            long now=SystemClock.elapsedRealtime();predictor.add(hr,now);
+            boolean wasWaiting=latest.waiting;latest.sample(hr,now);attempts=0;
             status="Sensor connected · live "+hr+" bpm";
             if(wasWaiting)say(latest.paused?"Sensor connected. Tap Resume when ready.":"Sensor connected. Training resumed.");
         });
@@ -222,7 +256,7 @@ public final class WorkoutService extends Service {
     @Override public void onDestroy(){
         AudioSettings.prefs(this).unregisterOnSharedPreferenceChangeListener(audioListener);
         if(latest!=null && !latest.done){latest.tick(SystemClock.elapsedRealtime());latest.paused=true;latest.autoResume=false;latest.waiting=true;latest.bpm=0;persist();}
-        ended=true;handler.removeCallbacksAndMessages(null);closeLink();
+        ended=true;clearPrediction(true);handler.removeCallbacksAndMessages(null);closeLink();
         if(wake!=null && wake.isHeld())wake.release();
         if(speech!=null){speech.stop();speech.shutdown();}
         if(instance==this)instance=null;super.onDestroy();

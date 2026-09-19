@@ -27,6 +27,16 @@ countdown. Optional verbose transition audio previews the next zone and BPM targ
 then speaks a clock-driven 3–2–1 or 5–4–3–2–1 countdown. Configure it under
 **Settings → Transition countdown**; Off preserves the shorter coaching style.
 
+Experimental predictive coaching uses a quality-filtered linear trend from the
+last 12 seconds of live readings to project heart rate 15 seconds ahead. When the
+current reading is inside the target but the forecast is moving beyond it, Tempo
+can give an early “ease off” or “add effort” cue. The live forecast appears beneath
+the immediate coaching cue. Enable it under **Settings → Predictive coaching**.
+It starts after at least five readings spanning four seconds, rejects noisy or
+stale samples, waits for a sustained risk, and limits early warnings to once every
+30 seconds. This first version adapts to the current trend; it does not yet learn
+a long-term personal response model.
+
 It includes a 90-second test workout, a 20-minute Zone 2 workout, a 30-minute
 progressive workout, editable zone BPM ranges, spoken phase changes, and live
 in-zone, average, and peak metrics.
